@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 
 const API_BASE = 'http://localhost:4000/api';
@@ -62,33 +63,22 @@ const App = () => {
     }
   };
 
-  const apiCall = async (endpoint, options = {}) => {
-    setLoading(true);
-    setError('');
-    setSuccess('');
-    try {
-      const token = getToken();
-      const response = await fetch(`${API_BASE}${endpoint}`, {
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token && { Authorization: `Bearer ${token}` }),
-          ...options.headers,
-        },
-        ...options,
-      });
+  const apiCall = async (url, options = {}) => {
+  const token = localStorage.getItem('token');
 
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error || 'Erreur API');
-      }
-      return data;
-    } catch (error) {
-      showMessage(error.message, 'error');
-      throw error;
-    } finally {
-      setLoading(false);
-    }
-  };
+  const res = await fetch(API_BASE + url, {
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`,
+      ...(options.headers || {})
+    },
+    ...options
+  });
+
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+};
+
 
   // Composant d'authentification
   const AuthComponent = () => {
@@ -219,6 +209,9 @@ const App = () => {
       deadline: ''
     });
     const [editTask, setEditTask] = useState({});
+    // --- nouveau state pour rejoindre via code d'invitation ---
+    const [showJoinGroup, setShowJoinGroup] = useState(false);
+    const [inviteCode, setInviteCode] = useState('');
 
     const handleCreateGroup = async (e) => {
       e.preventDefault();
@@ -310,13 +303,38 @@ const App = () => {
       }
     };
 
-    const createInvite = async (groupId) => {
+   const createInvite = async (groupId) => {
+  try {
+    const data = await apiCall(`/invites/${groupId}/create`, { method: 'POST' });
+
+    // Copier seulement le token
+    navigator.clipboard.writeText(data.token);
+
+    showMessage("Code d'invitation copié !", 'success');
+  } catch (error) {
+    console.error('Error creating invite:', error);
+  }
+};
+
+
+    // --- nouvelle fonction pour accepter un code d'invitation ---
+    const handleAcceptInvite = async (e) => {
+      e.preventDefault();
+      if (!inviteCode || inviteCode.trim() === '') {
+        showMessage('Veuillez saisir un code d\'invitation valide.', 'error');
+        return;
+      }
       try {
-        const data = await apiCall(`/invites/${groupId}/create`, { method: 'POST' });
-        navigator.clipboard.writeText(data.link);
-        showMessage('Lien d\'invitation copié dans le presse-papier !', 'success');
+        await apiCall('/invites/accept', {
+          method: 'POST',
+          body: JSON.stringify({ token: inviteCode.trim() }),
+        });
+        setInviteCode('');
+        setShowJoinGroup(false);
+        await fetchUserData();
+        showMessage('Vous avez rejoint le groupe !', 'success');
       } catch (error) {
-        console.error('Error creating invite:', error);
+        console.error('Error accepting invite:', error);
       }
     };
 
@@ -373,12 +391,22 @@ const App = () => {
                 <div className="px-6 py-7">
                   <div className="flex justify-between items-center mb-6">
                     <h3 className="text-2xl font-semibold text-gray-900">Mes Groupes</h3>
-                    <button
-                      onClick={() => setShowCreateGroup(true)}
-                      className="bg-indigo-500 text-white px-4 py-2 rounded-lg hover:bg-indigo-600 transition duration-200"
-                    >
-                      + Nouveau Groupe
-                    </button>
+                    <div className="flex space-x-2">
+                      <button
+                        onClick={() => setShowCreateGroup(true)}
+                        className="bg-indigo-500 text-white px-4 py-2 rounded-lg hover:bg-indigo-600 transition duration-200"
+                      >
+                        + Nouveau Groupe
+                      </button>
+
+                      {/* bouton pour ouvrir la modal rejoindre par code */}
+                      <button
+                        onClick={() => setShowJoinGroup(true)}
+                        className="bg-gray-100 text-gray-800 px-4 py-2 rounded-lg hover:bg-gray-200 transition duration-200"
+                      >
+                        Rejoindre (code)
+                      </button>
+                    </div>
                   </div>
                   
                   {groups.length === 0 ? (
@@ -547,6 +575,47 @@ const App = () => {
                     className="bg-indigo-500 text-white px-4 py-2 rounded-lg hover:bg-indigo-600 disabled:opacity-50 transition duration-200"
                   >
                     {loading ? 'Création...' : 'Créer le groupe'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* Modal rejoindre par code d'invitation (nouveau) */}
+        {showJoinGroup && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+            <div className="bg-white rounded-xl p-6 w-full max-w-md">
+              <h3 className="text-xl font-bold mb-4">Rejoindre un groupe</h3>
+              <form onSubmit={handleAcceptInvite}>
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Code d'invitation</label>
+                    <input
+                      type="text"
+                      placeholder="Collez le code d'invitation ici"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      value={inviteCode}
+                      onChange={(e) => setInviteCode(e.target.value)}
+                      required
+                    />
+                    <p className="text-xs text-gray-500 mt-2">Vous pouvez coller un token reçu par mail ou copier depuis un propriétaire du groupe.</p>
+                  </div>
+                </div>
+                <div className="mt-6 flex justify-end space-x-3">
+                  <button
+                    type="button"
+                    onClick={() => { setShowJoinGroup(false); setInviteCode(''); }}
+                    className="px-4 py-2 text-gray-600 hover:text-gray-800 font-medium"
+                  >
+                    Annuler
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    className="bg-green-500 text-white px-4 py-2 rounded-lg hover:bg-green-600 disabled:opacity-50 transition duration-200"
+                  >
+                    {loading ? 'Validation...' : 'Rejoindre le groupe'}
                   </button>
                 </div>
               </form>
